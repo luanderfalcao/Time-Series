@@ -1,0 +1,177 @@
+# import library
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error # Bibliotecas de matemática - RMSE
+from math import sqrt # Bibliotecas de matemática - RMSE
+import statsmodels.api as sm # Biblioteca de TS
+import pmdarima as pm # Biblioteca de TS
+from statsmodels.tsa.seasonal import seasonal_decompose # Biblioteca de TS
+from statsmodels.tsa.stattools import acf, pacf # Biblioteca de TS
+from statsmodels.tsa.holtwinters import ExponentialSmoothing, SimpleExpSmoothing, Holt # Biblioteca de TS
+import datetime # Biblioteca de Data
+from dateutil.relativedelta import * # Biblioteca de Data
+#Importing data
+#Subsetting the dataset
+#Index 11856 marks the end of year 2013
+df = pd.read_csv('D:/Users/luanderf/Documents/Python/Time_Series_Analysis-master/Time_Series_Analysis-master/Train.csv', sep=',', nrows = 11856)
+df.head()
+df.tail()
+print (df.dtypes)
+#Creating train and test set
+#Index 10392 marks the end of October 2013
+train=df[0:10392]
+test=df[10392:]
+#Aggregating the dataset at daily level
+df['Timestamp'] = pd.to_datetime(df['Datetime'],format='%d-%m-%Y %H:%M')
+df.index = df.Timestamp
+df = df.resample('D').mean()
+train['Timestamp'] = pd.to_datetime(train['Datetime'],format='%d-%m-%Y %H:%M')
+train.index = train.Timestamp
+train = train.resample('D').mean()
+test['Timestamp'] = pd.to_datetime(test['Datetime'],format='%d-%m-%Y %H:%M')
+test.index = test.Timestamp
+test = test.resample('D').mean()
+train.head()
+test.head()
+df.head()
+df.tail()
+df.describe()
+len(df)
+
+# Decomposição
+
+df_log = np.log(df.Count)
+plt.plot(df_log)
+decomposition = seasonal_decompose(df_log, freq = 30)
+
+df_log_diff = df_log - df_log.shift()
+df_log_diff.dropna(inplace=True)
+plt.plot(df_log_diff)
+
+trend = decomposition.trend
+seasonal = decomposition.seasonal
+residual = decomposition.resid
+
+plt.subplot(411)
+plt.plot(df_log, label='Original')
+plt.legend(loc='best')
+plt.subplot(412)
+plt.plot(trend, label='Trend')
+plt.legend(loc='best')
+plt.subplot(413)
+plt.plot(seasonal,label='Seasonality')
+plt.legend(loc='best')
+plt.subplot(414)
+plt.plot(residual, label='Residuals')
+plt.legend(loc='best')
+plt.tight_layout()
+
+lag_acf = acf(df_log_diff, nlags=40)
+lag_pacf = pacf(df_log_diff, nlags=40, method='ols')
+
+#Plot ACF:
+plt.subplot(121)
+plt.plot(lag_acf)
+plt.axhline(y=0,linestyle='--',color='gray')
+plt.axhline(y=-1.96/np.sqrt(len(df_log_diff)),linestyle='--',color='gray')
+plt.axhline(y=1.96/np.sqrt(len(df_log_diff)),linestyle='--',color='gray')
+plt.title('Autocorrelation Function')
+#Plot PACF:
+plt.subplot(122)
+plt.plot(lag_pacf)
+plt.axhline(y=0,linestyle='--',color='gray')
+plt.axhline(y=-1.96/np.sqrt(len(df_log_diff)),linestyle='--',color='gray')
+plt.axhline(y=1.96/np.sqrt(len(df_log_diff)),linestyle='--',color='gray')
+plt.title('Partial Autocorrelation Function')
+plt.tight_layout()
+
+#we use tra.diff()(differenced data), because this time series is unit root process.
+fig,ax = plt.subplots(2,1,figsize=(20,10))
+fig = sm.graphics.tsa.plot_acf(df_log_diff.diff().dropna(), lags=40, ax=ax[0])
+fig = sm.graphics.tsa.plot_pacf(df_log_diff.diff().dropna(), lags=40, ax=ax[1])
+plt.show()
+
+# Method – Auto ARIMA
+
+model_teste = pm.auto_arima(df.Count, start_p=1, start_q=1,
+                      test='adf',       # use adftest to find optimal 'd'
+                      max_p=3, max_q=3, # maximum p and q
+                      m=1,              # frequency of series
+                      d=None,           # let model determine 'd'
+                      seasonal=False,   # No Seasonality
+                      start_P=0,
+                      D=0,
+                      trace=True,
+                      error_action='ignore',
+                      suppress_warnings=True,
+                      stepwise=True)
+print(model_teste.summary())
+
+
+# Method – ARIMA
+
+y_hat_avg = test.copy()
+fit1 = sm.tsa.statespace.SARIMAX(train.Count, order=(1, 1, 1),seasonal_order=(1,1,1,7), trend='ct').fit()
+y_hat_avg['SARIMA'] = fit1.predict(start="2013-11-1", end="2013-12-31", dynamic=True)
+
+plt.figure(figsize=(16,8))
+plt.plot(train['Count'], label='Train')
+plt.plot(test['Count'], label='Test')
+plt.plot(y_hat_avg['SARIMA'], label='SARIMA')
+plt.legend(loc='best')
+plt.show()
+
+rms1 = sqrt(mean_squared_error(test.Count, y_hat_avg.SARIMA))
+print(rms1)
+
+res = fit1.resid
+fig,ax = plt.subplots(2,1,figsize=(15,8))
+fig = sm.graphics.tsa.plot_acf(res, lags=40, ax=ax[0])
+fig = sm.graphics.tsa.plot_pacf(res, lags=40, ax=ax[1])
+plt.show()
+
+# Accuracy metrics
+mape = np.mean(np.abs(y_hat_avg.SARIMA - test.Count)/np.abs(test.Count))  # MAPE
+me = np.mean(y_hat_avg.SARIMA - test.Count)             # ME
+mae = np.mean(np.abs(y_hat_avg.SARIMA - test.Count))    # MAE
+mpe = np.mean((y_hat_avg.SARIMA - test.Count)/test.Count)   # MPE
+rmse = np.mean((y_hat_avg.SARIMA - test.Count)**2)**.5  # RMSE
+corr = np.corrcoef(y_hat_avg.SARIMA, test.Count)[0,1]   # corr
+mins = np.amin(np.hstack([y_hat_avg.SARIMA[:,None], test.Count[:,None]]), axis=1)
+maxs = np.amax(np.hstack([y_hat_avg.SARIMA[:,None], test.Count[:,None]]), axis=1)
+minmax = 1 - np.mean(mins/maxs)             # minmax
+print('mape', mape, 'me', me, 'mae',  mae, 'mpe', mpe, 'rmse', rmse, 'corr', corr, 'minmax', minmax)
+
+# Method – Holt-Winters Method
+y_hat_avg2 = test.copy()
+fit2 = ExponentialSmoothing(np.asarray(train['Count']) ,seasonal_periods=7, trend='add', seasonal='add',).fit()
+y_hat_avg2['Holt_Winter'] = fit2.forecast(len(test))
+plt.figure(figsize=(16,8))
+plt.plot(train['Count'], label='Train')
+plt.plot(test['Count'], label='Test')
+plt.plot(y_hat_avg2['Holt_Winter'], label='Holt_Winter')
+plt.legend(loc='best')
+plt.show()
+
+rms2 = sqrt(mean_squared_error(test.Count, y_hat_avg2.Holt_Winter))
+print(rms2)
+
+# Modelo de Previsão
+
+mod1 = sm.tsa.statespace.SARIMAX(df.Count, order=(1,1,1), seasonal_order=(1,1,1,7), trend='c').fit()
+print(mod1.summary())
+
+df['forecast'] = mod1.predict(start=400, end=494, dynamic=True)
+df[['Count', 'forecast']].plot(figsize=(12, 8))
+
+start = datetime.datetime.strptime("2013-12-31", "%Y-%m-%d")
+date_list = [start + relativedelta(days=x) for x in range(0,90)]
+future = pd.DataFrame(index=date_list, columns = df.columns)
+df = pd.concat([df, future])
+
+df['forecast'] = mod1.predict(start = 493, end = 583, dynamic= True)
+df[['Count', 'forecast']].plot(figsize=(12, 8))
+
+
+
